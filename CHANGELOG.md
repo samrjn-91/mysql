@@ -13,6 +13,17 @@
   unsolicited public keys, preserves errors from plugins, and starts plugins
   only after the TLS handshake has completed. (#1696)
 
+* Add Kerberos (GSSAPI) authentication in the new `kerberos` sub-package,
+  implementing the server's `authentication_kerberos_client` plugin. Importing
+  `github.com/go-sql-driver/mysql/kerberos` registers it; no DSN change is
+  needed. The default provider is pure Go, needs no system Kerberos library, and
+  takes credentials from a keytab, the DSN password, or an existing credential
+  cache. The password is only used to obtain a ticket from the KDC and is never
+  sent to the server. Mutual authentication is required, so a server that does
+  not return a valid `AP-REP` fails the connection. The GSSAPI implementation is
+  pluggable through `kerberos.Provider` for platform libraries such as SSPI, and
+  the dependencies are only linked into programs that import the sub-package.
+
 ## v1.10.1 (2026-09-02)
 
 * Fix `Config.FormatDSN()` dropping `Addr` when `Net` is empty.

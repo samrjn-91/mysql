@@ -643,6 +643,65 @@ An empty token makes `Apply` return `ErrOpenIDConnectToken` without changing the
 configuration. Return this error from `BeforeConnect` to abort the connection.
 Token refresh affects new connections, not existing pooled sessions.
 
+### Kerberos authentication
+
+Kerberos (GSSAPI) support lives in the `kerberos` sub-package so that its
+dependencies are only linked into programs that use it. Import it for its side
+effects to register the server's `authentication_kerberos_client` plugin:
+
+```go
+import (
+    "database/sql"
+
+    _ "github.com/go-sql-driver/mysql/kerberos"
+)
+```
+
+No DSN parameter is required. The server requests Kerberos with an
+authentication switch when the account uses it, and the driver then runs this
+plugin. The plugin requests mutual authentication and fails the connection
+unless the server proves its identity with a valid `AP-REP`, so Kerberos
+authenticates the server as well as the client.
+
+The default provider is pure Go (built on
+[gokrb5](https://github.com/jcmturner/gokrb5)) and needs no system Kerberos
+library. It resolves credentials in this order:
+
+1. a keytab, when one is configured;
+2. the DSN password, used only to obtain a ticket-granting ticket from the KDC;
+3. an existing credential cache from `$KRB5CCNAME`.
+
+The password is never sent to the MySQL server.
+
+To control where credentials and configuration come from, register explicitly
+before opening connections:
+
+```go
+kerberos.Register(kerberos.Config{
+    Username: "svc_mysql@EXAMPLE.COM", // Defaults to the DSN user.
+    Provider: &kerberos.GoKrb5Provider{
+        ConfigPath:      "/etc/krb5.conf",  // Defaults to $KRB5_CONFIG.
+        KeytabPath:      "/etc/mysql.keytab",
+        DisablePAFXFAST: true,              // Often required by Active Directory.
+    },
+})
+```
+
+The default provider reads MIT-style *file* credential caches. It cannot read
+the Windows LSA cache or the `DIR:`, `KEYRING:`, `KCM:` or `API:` cache types,
+and it reports a clear error rather than failing obscurely. On Windows, supply a
+keytab or a password, point `KRB5CCNAME` at a file cache, or implement
+`kerberos.Provider` on top of SSPI and set it as `Config.Provider`.
+
+`Config.AllowCleartextFallback` reproduces the reference connectors' behaviour
+of sending the password when the server starts Kerberos but offers no service
+principal name. It is a downgrade, so it is disabled by default, and even when
+enabled the plugin refuses to send the password unless the connection uses
+driver-managed TLS or a unix socket.
+
+MariaDB's `auth_gssapi_client` plugin uses a different wire format and is not
+handled by this package.
+
 ### Connection pool and timeouts
 The connection pool is managed by Go's database/sql package. For details on how to configure the size of the pool and how long connections stay in the pool see `*DB.SetMaxOpenConns`, `*DB.SetMaxIdleConns`, and `*DB.SetConnMaxLifetime` in the [database/sql documentation](https://golang.org/pkg/database/sql/). The read, write, and dial timeouts for each individual connection are configured with the DSN parameters [`readTimeout`](#readtimeout), [`writeTimeout`](#writetimeout), and [`timeout`](#timeout), respectively.
 
@@ -667,6 +726,11 @@ The driver implements a pluggable authentication system that supports various au
 * `mysql_old_password` - Old MySQL authentication (requires `allowOldPasswords=true`)
 * `sha256_password` - SHA256 authentication
 * `client_ed25519` - MariaDB Ed25519 authentication
+
+`authentication_kerberos_client` is provided by the optional
+[`kerberos` sub-package](#kerberos-authentication), and OpenID Connect is
+selected explicitly with [`mysql.OIDCToken`](#openid-connect-authentication)
+rather than through this registry.
 
 Custom plugins implement the two methods of `AuthPlugin`, `InitAuth` and `ContinuationAuth`, and are registered with `RegisterAuthPlugin(name, factory)`. Registration does not call the factory; the driver calls it to create an independent instance for each authentication exchange. Factories may run concurrently for different connections. All built-in plugins use the same registry: registering a built-in name replaces its factory for subsequent authentication exchanges, including the initial handshake and authentication switches. Authentication-method permissions such as `allowCleartextPasswords` still apply to that name. Built-in plugin implementations are internal to the driver.
 
