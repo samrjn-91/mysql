@@ -66,6 +66,17 @@ type Config struct {
 	// takes precedence over the realm advertised by the server.
 	Username string
 
+	// SPN overrides the service principal name advertised by the server, in
+	// "service/host@REALM" form, for example
+	// "mysql/db.example.com@EXAMPLE.COM". The realm may be omitted.
+	//
+	// Set this when the server advertises a name that is not registered with
+	// the KDC, which a KDC_ERR_S_PRINCIPAL_UNKNOWN response reports. That
+	// happens most often behind a load balancer or proxy, where the server
+	// announces its own backend hostname while the SPN is registered against
+	// the name clients connect to.
+	SPN string
+
 	// AllowCleartextFallback permits sending the DSN password as cleartext when
 	// the server starts Kerberos authentication but offers no service principal
 	// name, which is how the reference connectors behave.

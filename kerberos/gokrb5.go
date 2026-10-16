@@ -78,6 +78,17 @@ func (p *GoKrb5Provider) NewInitiator(ctx context.Context, req Request) (Initiat
 		return nil, err
 	}
 
+	// gokrb5 documents the SPN as "<SERVICE>/<FQDN>" and splits it on "/"
+	// only, so a trailing "@REALM" would become part of the host component.
+	principal, spnRealm := splitSPN(req.SPN)
+	if principal == "" {
+		return nil, fmt.Errorf("invalid service principal name %q", req.SPN)
+	}
+	// The server names the realm its SPN lives in, which is more authoritative
+	// than guessing from krb5.conf, and is what makes a cross-realm service
+	// resolvable at all.
+	conf = withSPNRealm(conf, spnHost(principal), spnRealm)
+
 	realm := req.Realm
 	if realm == "" {
 		realm = p.Realm
@@ -90,7 +101,48 @@ func (p *GoKrb5Provider) NewInitiator(ctx context.Context, req Request) (Initiat
 	if err != nil {
 		return nil, err
 	}
-	return &gokrb5Initiator{client: cl, spn: req.SPN}, nil
+	return &gokrb5Initiator{client: cl, spn: principal, fullSPN: req.SPN}, nil
+}
+
+// splitSPN separates a service principal name into its principal and realm
+// parts, so that "mysql/db.example.com@EXAMPLE.COM" yields
+// "mysql/db.example.com" and "EXAMPLE.COM". The realm is empty when the name
+// carries none.
+//
+// The realm separator is the last "@": realms never contain one, while a
+// principal component may.
+func splitSPN(spn string) (principal, realm string) {
+	if i := strings.LastIndex(spn, "@"); i >= 0 {
+		return spn[:i], spn[i+1:]
+	}
+	return spn, ""
+}
+
+// spnHost returns the host component of a "service/host" principal, or an
+// empty string when there is none.
+func spnHost(principal string) string {
+	parts := strings.Split(principal, "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[1]
+}
+
+// withSPNRealm returns a configuration that resolves host to realm. It copies
+// the configuration rather than mutating the shared one, because a single
+// provider serves connections concurrently.
+func withSPNRealm(conf *config.Config, host, realm string) *config.Config {
+	if host == "" || realm == "" || conf.ResolveRealm(host) == realm {
+		return conf
+	}
+	updated := *conf
+	mapping := make(config.DomainRealm, len(conf.DomainRealm)+1)
+	for k, v := range conf.DomainRealm {
+		mapping[k] = v
+	}
+	mapping[host] = realm
+	updated.DomainRealm = mapping
+	return &updated
 }
 
 // newClient builds and, where necessary, logs in a gokrb5 client.
@@ -252,7 +304,11 @@ func runContext(ctx context.Context, fn func() error) error {
 // gokrb5Initiator performs a GSSAPI krb5 AP-REQ/AP-REP exchange.
 type gokrb5Initiator struct {
 	client *client.Client
-	spn    string
+	// spn is the "<SERVICE>/<FQDN>" form gokrb5 expects.
+	spn string
+	// fullSPN is the name the server advertised, used in error messages so
+	// they can be matched against the server's configuration.
+	fullSPN string
 
 	sessionKey types.EncryptionKey
 	ctime      time.Time
@@ -282,7 +338,7 @@ func (i *gokrb5Initiator) Init(ctx context.Context) ([]byte, error) {
 		return err
 	})
 	if err != nil {
-		return nil, fmt.Errorf("obtaining service ticket for %q: %w", i.spn, err)
+		return nil, fmt.Errorf("obtaining service ticket for %q: %w", i.fullSPN, err)
 	}
 	i.sessionKey = sessionKey
 
@@ -291,7 +347,7 @@ func (i *gokrb5Initiator) Init(ctx context.Context) ([]byte, error) {
 		[]int{flags.APOptionMutualRequired},
 	)
 	if err != nil {
-		return nil, fmt.Errorf("building AP-REQ for %q: %w", i.spn, err)
+		return nil, fmt.Errorf("building AP-REQ for %q: %w", i.fullSPN, err)
 	}
 
 	// Keep the authenticator timestamp so the AP-REP can be matched to this
@@ -305,7 +361,7 @@ func (i *gokrb5Initiator) Init(ctx context.Context) ([]byte, error) {
 
 	b, err := token.Marshal()
 	if err != nil {
-		return nil, fmt.Errorf("marshaling AP-REQ for %q: %w", i.spn, err)
+		return nil, fmt.Errorf("marshaling AP-REQ for %q: %w", i.fullSPN, err)
 	}
 	i.sent = true
 	return b, nil

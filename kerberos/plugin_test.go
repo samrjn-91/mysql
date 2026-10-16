@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/jcmturner/gokrb5/v8/config"
 )
 
 // buildAuthData encodes a Kerberos authentication switch payload.
@@ -450,6 +451,118 @@ func TestConfigWithDefaults(t *testing.T) {
 	prov := &fakeProvider{}
 	if got := (Config{Provider: prov}).withDefaults(); got.Provider != Provider(prov) {
 		t.Error("withDefaults must keep an explicit Provider")
+	}
+}
+
+func TestSplitSPN(t *testing.T) {
+	tests := []struct {
+		name      string
+		spn       string
+		principal string
+		realm     string
+	}{
+		{
+			// gokrb5 splits on "/" only, so leaving "@REALM" attached makes the
+			// KDC answer KDC_ERR_S_PRINCIPAL_UNKNOWN.
+			name:      "service host and realm",
+			spn:       "mysql/wh-166f758b38.svr.us.jpmchase.net@EXCHAD.JPMCHASE.NET",
+			principal: "mysql/wh-166f758b38.svr.us.jpmchase.net",
+			realm:     "EXCHAD.JPMCHASE.NET",
+		},
+		{
+			name:      "no realm",
+			spn:       "mysql/db.example.com",
+			principal: "mysql/db.example.com",
+			realm:     "",
+		},
+		{
+			name:      "realm separator is the last at sign",
+			spn:       "mysql/db@weird.example.com@EXAMPLE.COM",
+			principal: "mysql/db@weird.example.com",
+			realm:     "EXAMPLE.COM",
+		},
+		{name: "empty", spn: "", principal: "", realm: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			principal, realm := splitSPN(tt.spn)
+			if principal != tt.principal {
+				t.Errorf("principal: got %q, want %q", principal, tt.principal)
+			}
+			if realm != tt.realm {
+				t.Errorf("realm: got %q, want %q", realm, tt.realm)
+			}
+		})
+	}
+}
+
+func TestSPNHost(t *testing.T) {
+	tests := []struct {
+		principal string
+		want      string
+	}{
+		{"mysql/db.example.com", "db.example.com"},
+		{"mysql/db.example.com/extra", "db.example.com"},
+		{"mysql", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := spnHost(tt.principal); got != tt.want {
+			t.Errorf("spnHost(%q): got %q, want %q", tt.principal, got, tt.want)
+		}
+	}
+}
+
+func TestWithSPNRealm(t *testing.T) {
+	base := config.New()
+	base.DomainRealm[".example.com"] = "EXAMPLE.COM"
+
+	t.Run("adds an exact host mapping", func(t *testing.T) {
+		got := withSPNRealm(base, "db.other.net", "OTHER.NET")
+		if got == base {
+			t.Fatal("expected a copy, not the shared configuration")
+		}
+		if r := got.ResolveRealm("db.other.net"); r != "OTHER.NET" {
+			t.Errorf("resolved realm: got %q, want %q", r, "OTHER.NET")
+		}
+		// The shared configuration must be untouched, since a provider serves
+		// connections concurrently.
+		if _, ok := base.DomainRealm["db.other.net"]; ok {
+			t.Error("the original configuration was mutated")
+		}
+		if r := got.ResolveRealm("host.example.com"); r != "EXAMPLE.COM" {
+			t.Errorf("existing mapping lost: got %q", r)
+		}
+	})
+
+	t.Run("no change when already correct", func(t *testing.T) {
+		if got := withSPNRealm(base, "host.example.com", "EXAMPLE.COM"); got != base {
+			t.Error("expected the shared configuration to be reused")
+		}
+	})
+
+	t.Run("no change without a host or realm", func(t *testing.T) {
+		if got := withSPNRealm(base, "", "EXAMPLE.COM"); got != base {
+			t.Error("expected no copy without a host")
+		}
+		if got := withSPNRealm(base, "db.other.net", ""); got != base {
+			t.Error("expected no copy without a realm")
+		}
+	})
+}
+
+func TestSPNOverride(t *testing.T) {
+	prov := &fakeProvider{initiator: &fakeInitiator{initToken: []byte("t")}}
+	p := newTestPlugin(Config{SPN: "mysql/lb.example.com@EXAMPLE.COM"}, prov)
+
+	if _, err := p.InitAuth(context.Background(),
+		buildAuthData("mysql/backend-node-7.example.com@EXAMPLE.COM", "EXAMPLE.COM"),
+		&mysql.AuthContext{}); err != nil {
+		t.Fatalf("InitAuth: %v", err)
+	}
+	if prov.got.SPN != "mysql/lb.example.com@EXAMPLE.COM" {
+		t.Errorf("SPN: got %q, want the configured override", prov.got.SPN)
 	}
 }
 

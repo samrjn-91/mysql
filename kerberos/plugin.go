@@ -104,6 +104,11 @@ func (p *plugin) InitAuth(ctx context.Context, authData []byte, auth *mysql.Auth
 	if err != nil {
 		return nil, err
 	}
+	if p.cfg.SPN != "" {
+		// The configured name wins, because a server behind a load balancer
+		// may advertise a backend hostname that the KDC does not know.
+		spn = p.cfg.SPN
+	}
 	if spn == "" {
 		return nil, ErrNoSPN
 	}

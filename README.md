@@ -693,6 +693,24 @@ and it reports a clear error rather than failing obscurely. On Windows, supply a
 keytab or a password, point `KRB5CCNAME` at a file cache, or implement
 `kerberos.Provider` on top of SSPI and set it as `Config.Provider`.
 
+#### Overriding the service principal name
+
+If the KDC answers `KDC_ERR_S_PRINCIPAL_UNKNOWN` ("Server not found in Kerberos
+database"), the name the server advertised is not registered with the KDC. This
+is common behind a load balancer or proxy, where the server announces its own
+backend hostname while the SPN is registered against the name clients connect
+to. Compare the two names in the error, then override:
+
+```go
+kerberos.Register(kerberos.Config{
+    SPN: "mysql/mydb.example.com@EXAMPLE.COM", // The name registered with the KDC.
+})
+```
+
+Verify which names exist before guessing. With MIT tools, `kvno
+mysql/mydb.example.com` succeeds only for a registered SPN; against Active
+Directory, `setspn -Q mysql/mydb.example.com` reports the owning account.
+
 `Config.AllowCleartextFallback` reproduces the reference connectors' behaviour
 of sending the password when the server starts Kerberos but offers no service
 principal name. It is a downgrade, so it is disabled by default, and even when
