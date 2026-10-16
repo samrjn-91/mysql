@@ -86,11 +86,14 @@ type Config struct {
 	// driver-managed TLS or a unix socket.
 	AllowCleartextFallback bool
 
-	// SuppressFinalToken stops the plugin from sending a final empty packet
-	// after the security context is established. The default, sending it,
-	// matches the reference connectors. Enable this only if a server reports a
-	// protocol error at the very end of an otherwise successful exchange.
-	SuppressFinalToken bool
+	// SendFinalEmptyToken makes the plugin send an empty packet once the
+	// security context is established, before reading the server's OK.
+	//
+	// MySQL's server plugin writes OK without reading again, so the default
+	// sends nothing. An extra packet there desynchronises the packet sequence
+	// and fails the connection with "commands out of sync". Enable this only
+	// for a server that expects the additional exchange.
+	SendFinalEmptyToken bool
 }
 
 // withDefaults returns a copy of cfg with defaults filled in, leaving the

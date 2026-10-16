@@ -228,14 +228,14 @@ func TestExchangeCompletes(t *testing.T) {
 		t.Fatalf("InitAuth: %v", err)
 	}
 
-	// The server's AP-REP completes the context; the plugin closes the handshake
-	// with an empty packet and then expects OK.
+	// The server's AP-REP completes the context. The server then writes OK
+	// without reading again, so the plugin must send nothing further.
 	next, err := p.ContinuationAuth(context.Background(), []byte("AP-REP"), nil, &mysql.AuthContext{})
 	if err != nil {
 		t.Fatalf("ContinuationAuth: %v", err)
 	}
-	if next == nil || len(next) != 0 {
-		t.Errorf("expected a non-nil empty final token, got %#v", next)
+	if next != nil {
+		t.Errorf("expected nil so the driver only reads, got %#v", next)
 	}
 	if len(init.received) != 1 || string(init.received[0]) != "AP-REP" {
 		t.Errorf("initiator received %q", init.received)
@@ -250,9 +250,9 @@ func TestExchangeCompletes(t *testing.T) {
 	}
 }
 
-func TestExchangeSuppressFinalToken(t *testing.T) {
+func TestExchangeSendFinalEmptyToken(t *testing.T) {
 	init := &fakeInitiator{initToken: []byte("AP-REQ"), complete: true}
-	p := newTestPlugin(Config{SuppressFinalToken: true}, &fakeProvider{initiator: init})
+	p := newTestPlugin(Config{SendFinalEmptyToken: true}, &fakeProvider{initiator: init})
 
 	if _, err := p.InitAuth(context.Background(), buildAuthData("MySQL/db", "R"), &mysql.AuthContext{}); err != nil {
 		t.Fatalf("InitAuth: %v", err)
@@ -261,8 +261,8 @@ func TestExchangeSuppressFinalToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ContinuationAuth: %v", err)
 	}
-	if next != nil {
-		t.Errorf("expected nil so the driver only reads, got %#v", next)
+	if next == nil || len(next) != 0 {
+		t.Errorf("expected a non-nil empty token, got %#v", next)
 	}
 }
 
@@ -288,8 +288,8 @@ func TestExchangeMultipleRounds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("round 2: %v", err)
 	}
-	if next == nil || len(next) != 0 {
-		t.Errorf("round 2: expected the empty final token, got %#v", next)
+	if next != nil {
+		t.Errorf("round 2: expected nil so the driver only reads, got %#v", next)
 	}
 }
 

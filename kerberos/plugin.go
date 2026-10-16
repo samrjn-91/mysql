@@ -195,13 +195,14 @@ func (p *plugin) ContinuationAuth(ctx context.Context, packet, authData []byte, 
 	p.finished = true
 	p.close()
 
-	if p.cfg.SuppressFinalToken {
-		// Read the server's OK without sending anything further.
-		return nil, nil
+	if p.cfg.SendFinalEmptyToken {
+		// Send an empty packet before reading the server's OK.
+		return []byte{}, nil
 	}
-	// Send an empty packet to close the handshake, matching the reference
-	// connectors, then read the server's OK.
-	return []byte{}, nil
+	// The krb5 mechanism has nothing left to send. The server writes OK
+	// without reading again, so sending anything here would leave the
+	// connection a packet out of step.
+	return nil, nil
 }
 
 // cleartextFallback reproduces the reference client's behaviour when the server
